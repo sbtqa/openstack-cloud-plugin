@@ -13,6 +13,7 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
 import com.google.common.base.Charsets;
+import com.google.gson.Gson;
 import hudson.remoting.Base64;
 import jenkins.plugins.openstack.compute.internal.DestroyMachine;
 import org.jenkinsci.lib.configprovider.ConfigProvider;
@@ -25,7 +26,7 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.openstack4j.api.Builders;
-import org.openstack4j.model.compute.Server;
+import org.openstack4j.model.compute.*;
 import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 
 import com.google.common.base.Strings;
@@ -42,6 +43,7 @@ import hudson.util.FormValidation;
 import jenkins.model.Jenkins;
 import jenkins.plugins.openstack.compute.internal.Openstack;
 import jenkins.slaves.JnlpSlaveAgentProtocol;
+import org.openstack4j.openstack.compute.domain.NovaBlockDeviceMappingCreate;
 
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
@@ -231,6 +233,15 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
             String imageId = cloud.getOpenstack().getImageIdFor(opts.getImageId());
             LOGGER.fine("Setting image id to " + imageId);
             builder.image(imageId);
+            builder.blockDevice(NovaBlockDeviceMappingCreate.builder()
+                    .bootIndex(0)
+                    .uuid(imageId)
+                    .sourceType(BDMSourceType.IMAGE)
+                    .destinationType(BDMDestType.VOLUME)
+                    .volumeSize(54)
+                    .deleteOnTermination(true)
+                    .build());
+            builder.configDrive(false);
         }
 
         String hwid = opts.getHardwareId();
@@ -284,6 +295,8 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
         }
 
         final Openstack openstack = cloud.getOpenstack();
+        Gson gson = new Gson();
+        LOGGER.info("Sending request:\n" + gson.toJson(builder.build()));
         final Server server = openstack.bootAndWaitActive(builder, opts.getStartTimeout());
         LOGGER.info("Provisioned: " + server.toString());
 
