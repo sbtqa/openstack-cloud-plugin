@@ -29,15 +29,18 @@ import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.arrayWithSize;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.iterableWithSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertEquals;
@@ -47,8 +50,10 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -395,5 +400,29 @@ public class ProvisioningTest {
         assertEquals(cloud.name, m.get(JCloudsSlaveTemplate.OPENSTACK_CLOUD_NAME_KEY));
         assertEquals(template.name, m.get(JCloudsSlaveTemplate.OPENSTACK_TEMPLATE_NAME_KEY));
         assertEquals(new ServerScope.Node(server.getName()).getValue(), m.get(ServerScope.METADATA_KEY));
+    }
+
+    @Test
+    public void timeoutProvisioning() throws Exception {
+        JCloudsCloud c = j.dummyCloud(j.dummySlaveTemplate("label"));
+        Openstack os = c.getOpenstack();
+        when(os._bootAndWaitActive(any(ServerCreateBuilder.class), anyInt())).thenReturn(null); // Timeout
+        when(os.bootAndWaitActive(any(ServerCreateBuilder.class), anyInt())).thenCallRealMethod();
+        Server server = mock(Server.class);
+        when(os.getServersByName(any(String.class))).thenReturn(Collections.singletonList(server));
+
+        for (NodeProvisioner.PlannedNode pn : c.provision(Label.get("label"), 1)) {
+            try {
+                pn.future.get();
+                fail();
+            } catch (ExecutionException ex) {
+                Throwable e = ex.getCause();
+                assertThat(e, instanceOf(Openstack.ActionFailed.class));
+                assertThat(e.getMessage(), containsString("Failed to provision the server in time"));
+            }
+        }
+
+        verify(os).bootAndWaitActive(any(ServerCreateBuilder.class), anyInt());
+        verify(os)._bootAndWaitActive(any(ServerCreateBuilder.class), anyInt());
     }
 }

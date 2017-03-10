@@ -72,6 +72,7 @@ import org.openstack4j.model.compute.Keypair;
 import org.openstack4j.model.compute.Server;
 import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 import org.openstack4j.model.image.Image;
+import org.openstack4j.model.network.NetFloatingIP;
 import org.openstack4j.model.network.Network;
 import org.openstack4j.model.storage.block.Volume;
 import org.openstack4j.openstack.OSFactory;
@@ -105,10 +106,10 @@ public class Openstack {
         String tenant = id.length > 0 ? id[0] : "";
         String username = id.length > 1 ? id[1] : "";
         String domain = id.length > 2 ? id[2] : "";
-        final IOSClientBuilder<OSClient, ?> builder;
+        final IOSClientBuilder<? extends OSClient, ?> builder;
         if (domain.equals("")) {
             //If domain is empty it is assumed that is being used API V2
-            builder = OSFactory.builder().endpoint(endPointUrl)
+            builder = OSFactory.builderV2().endpoint(endPointUrl)
                      .credentials(username, credential.getPlainText())
                      .tenantName(tenant);
         } else {
@@ -184,6 +185,16 @@ public class Openstack {
         return running;
     }
 
+    public List<String> getFreeFipIds() {
+        ArrayList<String> free = new ArrayList<>();
+        for (NetFloatingIP ip : client.networking().floatingip().list()) {
+            if (ip.getFixedIpAddress() == null) {
+                free.add(ip.getId());
+            }
+        }
+        return free;
+    }
+
     public @Nonnull List<String> getSortedKeyPairNames() {
         List<String> keyPairs = new ArrayList<>();
         for (Keypair kp : client.compute().keypairs().list()) {
@@ -245,6 +256,16 @@ public class Openstack {
         return server;
     }
 
+    public @Nonnull List<Server> getServersByName(@Nonnull String name) {
+        List<Server> ret = new ArrayList<>();
+        for (Server server : client.compute().servers().list(Collections.singletonMap("name", name))) {
+            if (isOurs(server)) {
+                ret.add(server);
+            }
+        }
+        return ret;
+    }
+
     /**
      * Provision machine and wait until ready.
      *
@@ -254,6 +275,28 @@ public class Openstack {
         debug("Booting machine");
         try {
             Server server = _bootAndWaitActive(request, timeout);
+            if (server == null) {
+                // Server failed to become ACTIVE in time. Find in what state it is, then.
+                String name = request.build().getName();
+                List<? extends Server> servers = getServersByName(name);
+
+                String msg = "Failed to provision the server in time (" + timeout + "ms): " + servers.toString();
+
+                ActionFailed err = new ActionFailed(msg);
+                try {
+                    // We do not have the id so can not be sure which one is our
+                    int size = servers.size();
+                    if (size == 1) {
+                        // TODO async disposer
+                        destroyServer(servers.get(0));
+                    } else if (size > 1) {
+                        LOGGER.warning("Unable to destroy server " + name + " as there is " + size + " of them");
+                    }
+                } catch (Throwable ex) {
+                    err.addSuppressed(ex);
+                }
+                throw err;
+            }
             debug("Machine started: " + server.getName());
             throwIfFailed(server);
             return server;
@@ -340,7 +383,8 @@ public class Openstack {
         try {
             ip = fips.allocateIP(poolName);
         } catch (ResponseException ex) {
-            throw new ActionFailed("Failed to allocate IP for " + server.getName(), ex);
+            // TODO Grab some still IPs from JCloudsCleanupThread
+            throw new ActionFailed(ex.getMessage() + " Allocating for " + server.getName(), ex);
         }
         debug("Floating IP allocated " + ip.getFloatingIpAddress());
         try {
@@ -360,6 +404,11 @@ public class Openstack {
         }
 
         return ip;
+    }
+
+    public void destroyFip(String fip) {
+        ActionResponse delete = client.networking().floatingip().delete(fip);
+        throwIfFailed(delete);
     }
 
     /**

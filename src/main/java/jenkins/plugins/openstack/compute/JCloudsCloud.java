@@ -5,6 +5,7 @@ import java.io.StringWriter;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
+import java.net.NoRouteToHostException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URL;
@@ -78,6 +79,7 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
 
     private final @Nonnull List<JCloudsSlaveTemplate> templates;
 
+    // Make sure only diff of defaults is saved so when plugin defaults will change users are not stuck with outdated config
     private /*final*/ @Nonnull SlaveOptions slaveOptions;
 
     // Backward compatibility
@@ -123,7 +125,7 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
                     socket.connect(new InetSocketAddress(publicAddress, 22), 200);
                     socket.close();
                     return true;
-                } catch (ConnectException|SocketTimeoutException ex) {
+                } catch (ConnectException|NoRouteToHostException|SocketTimeoutException ex) {
                     // Exactly what we are looking for
                     LOGGER.log(Level.FINEST, "SSH port not open (yet)", ex);
                     return false;
@@ -140,14 +142,15 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
         },
         JNLP {
             @Override
-            public ComputerLauncher createLauncher(@Nonnull JCloudsSlave slave) {
+            public ComputerLauncher createLauncher(@Nonnull JCloudsSlave slave) throws IOException {
+                Jenkins.getActiveInstance().addNode(slave);
                 return new JNLPLauncher();
             }
 
             @Override
             public boolean isReady(@Nonnull JCloudsSlave slave) {
                 // The address might not be visible at all so let's just wait for connection.
-                return true;
+                return slave.getChannel() != null;
             }
         };
 
@@ -164,15 +167,15 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
         public abstract boolean isReady(@Nonnull JCloudsSlave slave);
     }
 
-    public static @Nonnull List<String> getCloudNames() {
-        List<String> cloudNames = new ArrayList<>();
+    public static @Nonnull List<JCloudsCloud> getClouds() {
+        List<JCloudsCloud> clouds = new ArrayList<>();
         for (Cloud c : Jenkins.getActiveInstance().clouds) {
             if (JCloudsCloud.class.isInstance(c)) {
-                cloudNames.add(c.name);
+                clouds.add((JCloudsCloud) c);
             }
         }
 
-        return cloudNames;
+        return clouds;
     }
 
     public static @Nonnull JCloudsCloud getByName(@Nonnull String name) throws IllegalArgumentException {
@@ -228,7 +231,6 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
     }
 
     public @Nonnull SlaveOptions getEffectiveSlaveOptions() {
-        // Make sure only diff of defaults is saved so when defaults will change users are not stuck with outdated config
         return DescriptorImpl.DEFAULTS.override(slaveOptions);
     }
 
@@ -471,7 +473,7 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
             return "Cloud (OpenStack)";
         }
 
-        public SlaveOptions getDefaultOptions() {
+        public static SlaveOptions getDefaultOptions() {
             return DEFAULTS;
         }
 

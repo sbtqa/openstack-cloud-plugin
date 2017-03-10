@@ -2,6 +2,7 @@ package jenkins.plugins.openstack.compute;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.Extension;
+import hudson.Util;
 import hudson.model.Descriptor;
 import hudson.model.TaskListener;
 import hudson.slaves.AbstractCloudComputer;
@@ -31,10 +32,13 @@ public class JCloudsSlave extends AbstractCloudSlave implements TrackedItem {
     private static final Logger LOGGER = Logger.getLogger(JCloudsSlave.class.getName());
 
     private final @Nonnull String cloudName;
+    // Full/effective options
     private /*final*/ @Nonnull SlaveOptions options;
     private final ProvisioningActivity.Id provisioningId;
 
     private /*final*/ @Nonnull String nodeId;
+
+    private final long created = System.currentTimeMillis();
 
     // Backward compatibility
     private transient @Deprecated int overrideRetentionTime;
@@ -73,13 +77,22 @@ public class JCloudsSlave extends AbstractCloudSlave implements TrackedItem {
     protected Object readResolve() {
         super.readResolve(); // Call parent
         if (options == null) {
-            options = SlaveOptions.builder()
-                    .retentionTime(overrideRetentionTime)
-                    .jvmOptions(jvmOptions)
+            // Node options are not of override of anything so we need to ensure this fill all mandatory fields
+            // We base the outdated config on current plugin defaults to increase the chance it will work.
+            SlaveOptions.Builder builder = JCloudsCloud.DescriptorImpl.getDefaultOptions().getBuilder()
+                    .jvmOptions(Util.fixEmpty(jvmOptions))
                     .credentialsId(credentialsId)
-                    .slaveType(slaveType)
-                    .build()
             ;
+
+            if (slaveType != null) {
+                builder.slaveType(slaveType);
+            }
+
+            if (overrideRetentionTime > 0) {
+                builder = builder.retentionTime(overrideRetentionTime);
+            }
+
+            options = builder.build();
             jvmOptions = null;
             credentialsId = null;
             slaveType = null;
@@ -106,6 +119,7 @@ public class JCloudsSlave extends AbstractCloudSlave implements TrackedItem {
      * Get effective options used to configure this slave.
      */
     public @Nonnull SlaveOptions getSlaveOptions() {
+        options.getClass();
         return options;
     }
 
@@ -127,6 +141,10 @@ public class JCloudsSlave extends AbstractCloudSlave implements TrackedItem {
     @Override
     public @Nonnull ProvisioningActivity.Id getId() {
         return this.provisioningId;
+    }
+
+    public long getCreatedTime() {
+        return created;
     }
 
     @Extension
