@@ -58,9 +58,12 @@ import org.openstack4j.api.client.IOSClientBuilder;
 import org.openstack4j.api.compute.ComputeFloatingIPService;
 import org.openstack4j.api.compute.ServerService;
 import org.openstack4j.api.exceptions.ResponseException;
-import org.openstack4j.model.common.ActionResponse;
+import org.openstack4j.api.image.ImageService;
+import org.openstack4j.api.storage.BlockStorageService;
+import org.openstack4j.api.storage.BlockVolumeService;
 import org.openstack4j.model.common.BasicResource;
 import org.openstack4j.model.common.Identifier;
+import org.openstack4j.model.compute.ActionResponse;
 import org.openstack4j.model.compute.Address;
 import org.openstack4j.model.compute.Fault;
 import org.openstack4j.model.compute.Flavor;
@@ -71,6 +74,7 @@ import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 import org.openstack4j.model.image.Image;
 import org.openstack4j.model.network.NetFloatingIP;
 import org.openstack4j.model.network.Network;
+import org.openstack4j.model.storage.block.Volume;
 import org.openstack4j.openstack.OSFactory;
 
 import hudson.util.Secret;
@@ -323,7 +327,10 @@ public class Openstack {
     public void destroyServer(@Nonnull Server server) throws ActionFailed {
         ComputeFloatingIPService fipsService = client.compute().floatingIps();
         ServerService servers = client.compute().servers();
+        BlockVolumeService volumeService = client.blockStorage().volumes();
         String nodeId = server.getId();
+        List<String> volumesAttached = server.getOsExtendedVolumesAttached();
+        LOGGER.info("Attached volumes: " + volumesAttached);
 
         for (FloatingIP ip: fipsService.list()) {
             if (nodeId.equals(ip.getInstanceId())) {
@@ -351,6 +358,14 @@ public class Openstack {
         }
 
         throwIfFailed(res);
+        for (String volumeAttached : volumesAttached) {
+            LOGGER.info("Deleting volume " + volumeAttached);
+            ActionResponse volumeDeleteRes = volumeService.delete(volumeAttached);
+            if (volumeDeleteRes.getCode() > 299) {
+                throw new ActionFailed(volumeDeleteRes.toString());
+            }
+            LOGGER.info("Deleted volume " + volumeAttached);
+        }
     }
 
     /**
